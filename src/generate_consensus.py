@@ -19,8 +19,8 @@ from Bio import SeqIO # Requires biopython
 
 def generate_abundance_table(fasta, n_umi = 19):
     """ Add UMI from fasta sequence to header """
-     # Initilialize variables
-    i=0 # Counter for no records
+    # Initilialize variables
+    i = 0 # Counter for no records
     df = pd.DataFrame(columns = ['UMI', 'Read', 'Size'])
 
     # Open fasta file
@@ -46,7 +46,7 @@ def generate_abundance_table(fasta, n_umi = 19):
 
 
 # Define UMI prcoessing function for fasta files
-def generate_consensus(fasta, n_umi = 19):
+def generate_consensus(fasta, n_umi = 19, threshold = 20):
     """Merge consensus reads."""
 
     # Get UMIs, read sequences and UMI counts
@@ -66,6 +66,9 @@ def generate_consensus(fasta, n_umi = 19):
 
         # Sum of UMI counts
         size = family['Size'].astype(int).sum(axis = 0)
+
+        if(size <= threshold):
+            next()
                 
         # Get major read sequence
         centroid = family['Read'].iloc[0]

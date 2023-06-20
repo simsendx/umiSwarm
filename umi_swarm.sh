@@ -23,10 +23,10 @@ display_help() {
 #####################################################
 
 # Directories for python scripts
-UMISWARM="/mnt/c/Users/Stefan/OneDrive - Simsen Diagnostics AB/Documents/GitHub/simsenseq-1/src/extract_umi_from_header.py"
-CONS="/mnt/c/Users/Stefan/OneDrive - Simsen Diagnostics AB/Documents/GitHub/simsenseq-1/src/generate_consensus.py"
+UMISWARM="/mnt/c/Users/Stefan/Documents/GitHub/umiSwarm/src/extract_umi_from_header.py"
+CONS="/mnt/c/Users/Stefan/Documents/GitHub/umiSwarm/src/generate_consensus.py"
 
-# General parameters
+# Set defaults for general parameters
 umi_length=19  # UMI-length to tranfer to header
 umi=true       # Use UMI in swarm
 ncore=12       # Number of threads to use
@@ -173,7 +173,7 @@ printf '%s %s %s\n' $GREEN "All dependencies installed." $NC
 # Enter working directory
 cd $FILES
 
-# Process fastqg files in input directory
+# Process fastq files in input directory
 for fastq in *.fastq.gz
 do
   PREFIX=${fastq%%[_]*} # Get sample name
@@ -183,7 +183,7 @@ do
     fq1=$fastq 
     printf '%s \n' $fq1
 
-    # define R2
+    # define R2 by replacing R1 with R2
     fq2=${fastq//R1/R2} 
     printf '%s \n' $fq2
             
@@ -225,6 +225,7 @@ do
       # Use vsearch to convert to fasta, removing "N" bases
       vsearch \
         --fastq_maxns 0 \
+        --fastq_truncqual 20 \
         --fastq_filter "${PREFIX}_merged_noPrimers.fastq.gz" \
         --fastaout "${PREFIX}_merged_noPrimers.fasta"
 
@@ -282,20 +283,21 @@ do
       #pigz "${PREFIX}_merged_noPrimers_dereplicated.fasta"
       #pigz "${PREFIX}_swarm_seeds.fasta"
 
-      # Use chime3 to detect de novo chimeras
+      # Add UMI back to header
+
+      # Use chime2 to detect de novo chimeras
       vsearch \
-        --uchime3_denovo "${PREFIX}_swarm_seeds.fasta" \
+        --uchime2_denovo "${PREFIX}_swarm_seeds.fasta" \
         --chimeras "${PREFIX}_chim.fasta" \
         --nonchimeras "${PREFIX}_non_chim.fasta"
 
-      # Merge reads by UMI
+      # Merge reads by UMI and create abundance table
       printf "%s \n" "Merging consensus families."
 
       python3 "$CONS" \
         --fasta "${PREFIX}_non_chim.fasta" \
-        --output "${PREFIX}_cons.csv" \
+        --output "${PREFIX}_cons_otu.csv" \
         --umi-length 19
-
     fi
 done
 
@@ -308,6 +310,31 @@ done
 # with sequences are rownames, sample names as column names and 
 # UMI familiy sizes as values. This can then be used for downstream
 # processing with phyloseq.
+
+##############################################
+###---------- Annotate sequences ----------###
+##############################################
+
+#download reference database
+#wget https://raw.githubusercontent.com/EivindStensrud/ScandiFish/main/ScandiFish_12s_v1.2/ScandiFish_12s_v1.4_nf.fasta # Downloads database
+#wget https://raw.githubusercontent.com/EivindStensrud/ScandiFish/main/ScandiFish_12s_v1.2/ScandiFish_12s_v1.4_nf.fasta.md5 # Downloads md5sum
+
+#md5sum -c ScandiFish_12s_v1.4.fasta.md5 # Checks if database is correct.
+
+
+
+# Run nucleotide BLAST
+# BLASTN compares the sequences and keeps up to 100 reference sequences.
+# Input is DADA2 output from function uniquesToFasta(seqtab.nochim).
+
+#blastn \
+#  -max_target_seqs 100 \
+#  -evalue 0.01 \
+#  -query /cluster/projects/nn9745k/02_results/40_simsenseq/umi_and_seq/rep-seqs.fna \
+#  -out /cluster/projects/nn9745k/02_results/40_simsenseq/umi_and_seq/umi_and_seqs_output_blast_results \
+#  -db /cluster/projects/nn9745k/03_databases/fish/ScandiFish_12s_v1.4/ScandiFish_12s_v1.4.fasta_db \
+#  -outfmt 6 \
+#  -num_threads $ncore 
 
 ##############################################
 ###------------ Phyloseq report -----------###
