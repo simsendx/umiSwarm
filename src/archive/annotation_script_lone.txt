@@ -1,0 +1,243 @@
+## Linux and R based script.
+## What run in Bash is hashed #, what to run in R is not hashed #.
+
+## Formats ScandiFish headers to fit taxonomic sorting assignment based on Lowest common ancestor analysis, and conducts Lowest common ancestor assignment and BLASTN top hit based assignment.
+
+## https://github.com/naturalis/galaxy-tool-lca # Source of LCA analysis tool
+## Beentjes KK, Speksnijder AGCL, Schilthuizen M, Hoogeveen M, Pastoor R, et al. (2019) Increased performance of DNA metabarcoding of macroinvertebrates by taxonomic sorting. PLOS ONE 14(12): e0226527. https://doi.org/10.1371/journal.pone.0226527
+## The Beentjes tool is based on MEGAN's conservative annotation approach from Huson et al. 2007
+## Huson, D. H., Auch, A. F., Qi, J., & Schuster, S. C. (2007). MEGAN analysis of metagenomic data. Genome Research, 17(3), 377–386. http://doi.org/10.1101/gr.5969107
+
+
+
+## Script start
+## Run in Bash
+
+#wget https://raw.githubusercontent.com/EivindStensrud/ScandiFish/main/ScandiFish_12s_v1.2/ScandiFish_12s_v1.4_nf.fasta # Downloads database
+#wget https://raw.githubusercontent.com/EivindStensrud/ScandiFish/main/ScandiFish_12s_v1.2/ScandiFish_12s_v1.4_nf.fasta.md5 # Downloads md5sum
+
+#md5sum -c ScandiFish_12s_v1.4.fasta.md5 # Checks if database is correct.
+
+
+## Assigning taxonomy by BLASTN
+##
+
+## ASV_table is obtained through DADA2 pipeline.
+## https://benjjneb.github.io/dada2/tutorial.html
+#
+#module load BLAST+/2.8.1-foss-2018b #Load BLAST
+##makeblastdb -in ScandiFish_12s_v1.4_nf.fasta -out ScandiFish_12s_v1.4.fasta_db -dbtype nucl -title "12S ScandiFish_12s_v1.4 Scandinavian fish database" #Input is the altered format of the ScandiFish database. # only needs to be ran once.
+##blastn -max_target_seqs 100 -evalue 1 -query input_seqtab.nochim_fasta_format -out output_blast_results -db ScandiFish_12s_v1.4.fasta_db -outfmt 6 -num_threads 2 # BLASTN compares the sequences and keeps up to 100 reference sequences. # input is asv_table in fasta format, DADA2; uniquesToFasta(seqtab.nochim) function
+
+##Location of database in nn9745k underneath, change input file
+#blastn -max_target_seqs 100 -evalue 1 -query input_seqtab.nochim_fasta_format -out output_blast_results -db /cluster/projects/nn9745k/03_databases/fish/ScandiFish_12s_v1.4/ScandiFish_12s_v1.4.fasta_db -outfmt 6 -num_threads 2 # BLASTN compares the sequences and keeps up to 100 reference sequences. # input is asv_table in fasta format, DADA2; uniquesToFasta(seqtab.nochim) function
+
+
+
+
+## The rest of the workflow merges the BLASTN based assignment to the LCA based assignment.
+## Downstream analysis is easily used in phyloseq package in R.
+
+## Continue in the workflow in R.
+
+##module load R-bundle-Bioconductor/3.11-foss-2020a-R-4.0.0 #May vary from different working environment.
+## Type "R" in bash and press enter to start R.
+
+if (!require("dada2")) {
+   BiocManager::install("dada2")
+   library(dada2); packageVersion("dada2")
+   }
+
+if (!require("phyloseq")) {
+   BiocManager::install("phyloseq", dependencies = TRUE)
+   library(phyloseq); packageVersion("phyloseq")
+   }
+
+if (!require("ggplot2")) {
+   install.packages("ggplot2", dependencies = TRUE)
+   library(ggplot2); packageVersion("ggplot2")
+   }
+if (!require("xlsx")) {
+   install.packages("xlsx", dependencies = TRUE)
+   library(xlsx)
+   }
+if (!require("stringr")) {
+   install.packages("stringr", dependencies = TRUE)
+   library(stringr)
+   }
+if (!require("R.utils")) {
+   install.packages("R.utils", dependencies = TRUE)
+   library(R.utils)
+   }
+if (!require("reshape2")) {
+   install.packages("reshape2", dependencies = TRUE)
+   library(reshape2)
+   }
+if (!require("dplyr")){
+  install.packages("dplyr")
+  library(dplyr)
+  }
+if (!require("limma")) {
+   BiocManager::install("limma")
+   library(limma)
+   }
+if (!require("psych")) {
+   install.packages("psych", dependencies = TRUE)
+   library(psych)
+   }
+
+
+rootPath <- file.path("") # Change to the path, where the result from DADA2 pipeline or similar pipelines is stored.
+figsPath <- file.path("") # Path where output will be stored.
+
+seqtab = readRDS(file.path(rootPath, "input_seqtab.nochim")) # Input is the ASV table from nochim dada2
+
+blast_results_db <- read.table(file.path(rootPath, "blast_results")) # Results from BLAST analysis above.
+colnames(blast_results_db) <- c( "Query ID", "Subject", "Identity percentage", 
+"Coverage", "Mismatches", "Gap.Openings", "Q.start", "Q.end",
+"S.start", "S.end", "Evalue", "Bitscore" ) # Matches ScandiFish and ScandiMarMal build-up
+
+summary(blast_results_db) # Checks if everything works
+dim(blast_results_db)
+length(unique(blast_results_db$Subject))
+length(unique(blast_results_db$"Query ID"))
+
+tax_db = stringr::str_replace_all(blast_results_db$Subject, ";", " / ") # Replaces ";" with "/" in the taxonomic ranking to become compatible with downstream analysis
+taxonomy = gsub(".*[|]", "", tax_db) # Removes "|" from header, replaces with nothing, to make compatible with downstream analysis
+
+
+blast_results_db$"Taxonomy" = taxonomy
+
+tax_acc = unique(blast_results_db$Subject)
+tax_accno = gsub(".*[|]([^|]+)[|].*", "\\1", tax_acc) # Extracts the accession number from subject id
+tax_accno = data.frame(cbind(tax_acc, tax_accno))
+colnames(tax_accno) = c("Subject", "Subject accession") # Stores accession number and subject ID in same column.
+
+blast_results_db = left_join(blast_results_db, tax_accno, by = "Subject") # Joins blast_results by accession and subject ID.
+blast_results_db$"Subject Taxonomy ID" = blast_results_db$"Subject" # Data formating
+blast_results_db$"Source" = "ScandiFish"
+
+blast_results_db_final = data.frame(cbind(blast_results_db$"Query ID",
+                                          blast_results_db$"Subject",
+                                          blast_results_db$"Subject accession",
+                                          blast_results_db$"Subject Taxonomy ID",
+                                          blast_results_db$"Identity percentage",
+                                          blast_results_db$"Coverage",
+                                          blast_results_db$"Evalue",
+                                          blast_results_db$"Bitscore",
+                                          blast_results_db$"Source",
+                                          blast_results_db$"Taxonomy"
+                                          ))
+colnames(blast_results_db_final) = c("#Query ID",
+                                     "#Subject",
+                                     "#Subject accession",
+                                     "#Subject Taxonomy ID",
+                                     "#Identity percentage",
+                                     "#Coverage",
+                                     "#Evalue",
+                                     "#Bitscore",
+                                     "#Source",
+                                     "#Taxonomy"
+                                          )
+
+write.table(blast_results_db_final,file.path(rootPath, "blast_results_mifish_final"), row.names = FALSE, quote = FALSE, sep = "\t") # Stores the BLAST results in a table accepted by the LCA analysis.
+
+## Exit R.
+## Proceed in Bash
+
+#wget https://raw.githubusercontent.com/naturalis/galaxy-tool-lca/master/lca.py # Downloads LCA script from GitHub.
+
+## Run LCA analysis in bash # run example 3 from link https://github.com/naturalis/galaxy-tool-lca
+## Make sure to empty table before re-running the code, otherwise will append data, not overwrite.
+
+#rm blast_results_mifish_final_lca_03_98_out # Removes table if existing LCA analysis exist.
+
+## LCA analysis
+## Best hit goes to species, taxonomic sorting is conducted if top hit <99%
+ 
+#python lca.py -i blast_results_mifish_final -o blast_results_mifish_final_lca_03_98_out -b 8 -id 98 -cov 95 -t best_hit -tid 99 -tcov 100 -flh unknown 
+
+
+## Continue in the workflow in R.
+
+#module load R-bundle-Bioconductor/3.11-foss-2020a-R-4.0.0
+## type "R" and press enter in Bash to start R.
+## Rerun package codes above.
+
+rootPath <- file.path("") # Change to the path, where the result from DADA2 pipeline is stored.
+figsPath <- file.path("") # Path where output will be stored.
+
+seqtab = readRDS(file.path(rootPath, "input_seqtab.nochim")) # Input is the ASV table.
+
+
+blast_results <- read.table(file.path(rootPath, "blast_results")) # Read Blast result from above.
+colnames(blast_results) <- c( "QueryID",  "SubjectID", "Perc.Ident",
+"Alignment.Length", "Mismatches", "Gap.Openings", "Q.start", "Q.end",
+"S.start", "S.end", "E", "Bits" ) #Order Blast results.
+
+
+blast_results = do.call( rbind,
+        lapply( split(blast_results, blast_results[,c("QueryID") ]), function(d){
+                                         d[which.max(d$Bits), ] } )
+        )
+summary(blast_results)
+dim(blast_results)
+length(unique(blast_results$SubjectID))
+length(unique(blast_results$QueryID))
+
+
+lca_table = read.table(file.path(rootPath,"blast_results_mifish_final_lca_03_98_out"), sep="\t",fill=T) # Read LCA output file
+colnames(lca_table) = c("Query","LCA_rank","LCA_taxon","Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species","Method") # Combines both LCA and top blast assignment. 
+tax = as.matrix(lca_table) #makes as matrix
+rownames(tax) <- tax[,1] # makes first col as rownames
+tax = tax[,-1] #removes col which became rownames
+tax = as.matrix(tax) # makes as matrix
+
+
+
+################## parse seqtab ####################
+
+seqtab_clean = seqtab[, colnames(seqtab) %in% blast_results$QueryID]
+
+seqtab_names = str_extract(rownames(seqtab_clean), "[^_]+")
+rownames(seqtab_clean) = seqtab_names
+
+################# sequence analysis evaluation ######
+track <- read.table(file.path(rootPath, "track_sequence_stats.csv"),
+                                   sep = ",", header = TRUE)
+
+summary(track)
+
+track$sample_id = str_extract(track$X, "[^_]+")
+
+seqtab_samplesum = rowSums(seqtab_clean)
+
+
+################# Sequence data analysis and visualization ###############
+dim(seqtab_clean)
+am_otu_n <- otu_table(t(seqtab), taxa_are_rows = TRUE)
+dim(am_otu_n)
+am_tax <- tax_table(as.matrix(tax))
+am_physeq_clean_n <- phyloseq(am_otu_n, am_tax) # Combines ASV/OTU and Taxonomic table.
+
+phyloseq_summarize_taxa <- function(phylo_seq_object, taxonomic_rank = rank_names(phylo_seq_object)[1], errorIfNULL = TRUE) {
+  taxa <- as(phyloseq::tax_table(phylo_seq_object, errorIfNULL)[, taxonomic_rank], 'character')
+  sum_tax_table <- summarize_taxa(as(phyloseq::otu_table(phylo_seq_object), 'matrix'), taxa)
+  phyloseq::phyloseq(phyloseq::otu_table(sum_tax_table, taxa_are_rows = TRUE),
+              phyloseq::sample_data(phylo_seq_object, FALSE))
+}
+
+species_table_n <- otu_table(phyloseq_summarize_taxa(am_physeq_clean_n, 'Species'))
+species_table_t = species_table_n #this could be used to make read counts
+species_table_n[species_table_n < 10] = 0 #these values are arbitraty 100
+species_table_n[species_table_n >= 10] = 1 #these values arbitraty  101
+species_table_n <- species_table_n[,colSums(species_table_n) > 0]
+ 
+write.csv(t(species_table_n), file.path(figsPath, "species_table_n.csv"))
+write.csv(t(species_table_t), file.path(figsPath, "species_table_t_reads_numbers"))
+
+
+
+
+
+saveRDS(am_physeq_clean_n,"phyloseq_mifish_lca.rds") ## Phyloseq object to use for further analysis on local computer.
