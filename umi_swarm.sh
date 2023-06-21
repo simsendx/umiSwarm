@@ -25,6 +25,7 @@ display_help() {
 # Directories for python scripts
 UMISWARM="/mnt/c/Users/Stefan/Documents/GitHub/umiSwarm/src/extract_umi_from_header.py"
 CONS="/mnt/c/Users/Stefan/Documents/GitHub/umiSwarm/src/generate_consensus.py"
+addUmiToHeader="/mnt/c/Users/Stefan/Documents/GitHub/umiSwarm/src/add_umi_to_header.py"
 
 # Set defaults for general parameters
 umi_length=19  # UMI-length to tranfer to header
@@ -225,7 +226,6 @@ do
       # Use vsearch to convert to fasta, removing "N" bases
       vsearch \
         --fastq_maxns 0 \
-        --fastq_truncqual 20 \
         --fastq_filter "${PREFIX}_merged_noPrimers.fastq.gz" \
         --fastaout "${PREFIX}_merged_noPrimers.fasta"
 
@@ -243,7 +243,7 @@ do
           --output "${PREFIX}_merged_noPrimers_umi_in_sequence.fasta"
 
         # Dereplicate unique sequences using vsearch
-        # This merges all unqiue sequences and add the abundance to the header
+        # This merges all unqiue sequences and adds the abundance to the header
         vsearch \
           --derep_fulllength "${PREFIX}_merged_noPrimers_umi_in_sequence.fasta" \
           --sizeout \
@@ -276,28 +276,46 @@ do
         -z \
         -d $distance \
         -s $PREFIX.stats \
-        -w "${PREFIX}_swarm_seeds.fasta" \
+        -w "${PREFIX}_swarm.fasta" \
         -o s$PREFIX.swarm "${PREFIX}_merged_noPrimers_dereplicated.fasta"
+
+      # Add UMI back to header
+      # UMI in sequence might interfere with chimera detection?
+      python3 "$addUmiToHeader" \
+        --fastain "${PREFIX}_swarm.fasta" \
+        --fastaout "${PREFIX}_swarm_umi_in_header.fasta"
 
       # Compress output fasta files
       #pigz "${PREFIX}_merged_noPrimers_dereplicated.fasta"
-      #pigz "${PREFIX}_swarm_seeds.fasta"
+      #pigz "${PREFIX}_swarm.fasta"
 
-      # Add UMI back to header
+      # make dereplicate representatives, merge on only marker region.
+      vsearch \
+        --sizeout \
+        --derep_fulllength "${PREFIX}_swarm_umi_in_header.fasta" \
+        --output "${PREFIX}_swarm_umi_in_header_dereplicated.fasta" 
+
+      # removes singletons and small clusters, and can be used directly in dada2 due to correct fastawidth
+      vsearch \
+        --fastx_filter "${PREFIX}_swarm_umi_in_header_dereplicated.fasta" \
+        --fastaout "${PREFIX}_swarm_umi_in_header_dereplicated_filtered.fasta"  \
+        --minsize 20 \
+        --fasta_width 0 
 
       # Use chime2 to detect de novo chimeras
       vsearch \
-        --uchime2_denovo "${PREFIX}_swarm_seeds.fasta" \
+        --uchime2_denovo "${PREFIX}_swarm_umi_in_header_dereplicated_filtered.fasta" \
         --chimeras "${PREFIX}_chim.fasta" \
         --nonchimeras "${PREFIX}_non_chim.fasta"
 
       # Merge reads by UMI and create abundance table
-      printf "%s \n" "Merging consensus families."
+      #printf "%s \n" "Merging consensus families."
 
-      python3 "$CONS" \
-        --fasta "${PREFIX}_non_chim.fasta" \
-        --output "${PREFIX}_cons_otu.csv" \
-        --umi-length 19
+      #python3 "$CONS" \
+      #  --fasta "${PREFIX}_non_chim.fasta" \
+      #  --output "${PREFIX}_cons_otu.csv" \
+      #  --umi_length 19
+
     fi
 done
 

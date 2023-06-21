@@ -1,2 +1,2 @@
 Module	Section	Sample Name	Source
-FastQC	all_sections	simsen-MiFish-v1-1ng-mock-3cyc-1_merged_noPrimers	/mnt/c/Users/Stefan/OneDrive - Simsen Diagnostics AB/Documents/GitHub/simsenseq-1/data/fastqc_reports/simsen-MiFish-v1-1ng-mock-3cyc-1_merged_noPrimers_fastqc.zip
+FastQC	all_sections	simsen-MiFish-v1-1ng-mock-3cyc-1_merged_noPrimers	/mnt/c/Users/Stefan/Documents/GitHub/umiSwarm/data/fastqc_reports/simsen-MiFish-v1-1ng-mock-3cyc-1_merged_noPrimers_fastqc.zip

@@ -28,15 +28,27 @@ def generate_abundance_table(fasta, n_umi = 19):
         i += 1
         header = record.id
         sequence = record.seq
-        umi = sequence[:n_umi]
-        new_sequence = sequence[n_umi:]
+
+        if i % 5000 == 0:
+            print("Processing record: ", i)
+
+        #print(header)
+        #print(sequence)
 
         # Extract UMI family size
-        match = re.search(r'size=(\d+)', header)
+        match = re.search(r'size=(\d+);', header)
         if match:
             size = match.group(1)
 
-        new_row = pd.DataFrame([{'UMI': str(umi), 'Read': str(new_sequence), 'Size': size}])
+        #print(size)
+        # Extract UMI 
+        match = re.search('umi=(.*?);', header)
+        if match:
+            umi = match.group(1)
+
+        #print(umi)
+
+        new_row = pd.DataFrame([{'UMI': str(umi), 'Read': str(sequence), 'Size': size}])
 
         # Add row to dataframe
         df = pd.concat([df, new_row], axis = 0, ignore_index=True)
@@ -67,8 +79,8 @@ def generate_consensus(fasta, n_umi = 19, threshold = 20):
         # Sum of UMI counts
         size = family['Size'].astype(int).sum(axis = 0)
 
-        if(size <= threshold):
-            next()
+        #if(size <= threshold):
+        #    next()
                 
         # Get major read sequence
         centroid = family['Read'].iloc[0]
