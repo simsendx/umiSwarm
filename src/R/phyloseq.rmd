@@ -1,0 +1,249 @@
+---
+title: "eDNA analysis"
+author: "Stefan Filges"
+date: '`r format(Sys.Date())`'
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    collapsed: true
+    smooth_scroll: true
+    number_sections: true
+    theme: spacelab
+    highlight: tango
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  cache = TRUE,
+  message = FALSE,
+  fig.align = 'center',
+  warning = FALSE
+)
+```
+
+# Analysis
+
+```{r, message=FALSE, warning=FALSE}
+# Results from BLAST analysis above.
+blast_results_db <- read.table(
+  file = "C:/Users/Stefan/Documents/GitHub/umiSwarm/src/blast"
+)
+
+# Matches ScandiFish and ScandiMarMal build-up
+colnames(blast_results_db) <- c(
+  "Query ID", "Subject", "Identity percentage", "Coverage", "Mismatches", 
+  "Gap.Openings", "Q.start", "Q.end", "S.start", "S.end", "Evalue", "Bitscore" ) 
+
+# Checks if everything works
+summary(blast_results_db) 
+dim(blast_results_db)
+length(unique(blast_results_db$Subject))
+length(unique(blast_results_db$"Query ID"))
+
+# Replaces ";" with "/" in the taxonomic ranking to become compatible with downstream analysis
+tax_db = stringr::str_replace_all(
+  string = blast_results_db$Subject, 
+  pattern =  ";", 
+  replacement = " / "
+)
+
+# Removes "|" from header, replaces with nothing, to make compatible with downstream analysis
+taxonomy = gsub(".*[|]", "", tax_db)
+
+blast_results_db$`Taxonomy` = taxonomy
+
+tax_acc = unique(blast_results_db$Subject)
+
+# Extracts the accession number from subject id
+tax_accno = gsub(".*[|]([^|]+)[|].*", "\\1", tax_acc)
+tax_accno = data.frame(cbind(tax_acc, tax_accno))
+
+# Stores accession number and subject ID in same column.
+colnames(tax_accno) = c("Subject", "Subject accession") 
+
+# Joins blast_results by accession and subject ID.
+blast_results_db = left_join(
+  x = blast_results_db, 
+  y = tax_accno, 
+  by = "Subject"
+) 
+
+# Data formating
+blast_results_db$`Subject Taxonomy ID` = blast_results_db$`Subject` 
+blast_results_db$`Source` = "ScandiFish"
+
+blast_results_db_final = data.frame(
+  cbind(blast_results_db$`Query ID`, blast_results_db$`Subject`,blast_results_db$`Subject accession`,
+        blast_results_db$`Subject Taxonomy ID`, blast_results_db$`Identity percentage`,
+        blast_results_db$`Coverage`,blast_results_db$`Evalue`, blast_results_db$`Bitscore`,
+        blast_results_db$`Source`,blast_results_db$`Taxonomy`)
+  )
+
+# Update column names
+colnames(blast_results_db_final) = c(
+  "#Query ID","#Subject","#Subject accession", "#Subject Taxonomy ID",
+  "#Identity percentage","#Coverage","#Evalue","#Bitscore","#Source","#Taxonomy"
+)
+
+# Stores the BLAST results in a table accepted by the LCA analysis.
+write.table(
+  x = blast_results_db_final,
+  file = file.path("C:/Users/Stefan/Documents/GitHub/umiSwarm/src/blast_results_mifish_final"), 
+  row.names = FALSE, 
+  quote = FALSE, 
+  sep = "\t"
+) 
+
+
+#Order Blast results.
+blast_results <- blast_results_db_final
+colnames(blast_results) <- c(
+  "Query ID","Subject","Subject accession","Subject Taxonomy ID","Identity percentage",
+  "Coverage","Evalue","Bitscore","Source","Taxonomy"
+) 
+
+
+blast_results = do.call(
+  rbind, lapply(
+    X = split(blast_results, blast_results[,c("Query ID") ]), 
+    FUN = function(d){d[which.max(d$Bitscore), ] } 
+  )
+)
+
+summary(blast_results)
+dim(blast_results)
+
+# Read LCA output file
+lca_table = read.table(
+  file = file.path(rootPath,"blast_results_mifish_final_lca_03_98_out"), 
+  sep = "\t",
+  fill = TRUE
+) 
+colnames(lca_table) = c("Query","LCA_rank","LCA_taxon","Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species","Method") # Combines both LCA and top blast assignment. 
+#makes as matrix
+tax = as.matrix(lca_table) 
+rownames(tax) <- tax[,1] # makes first col as rownames
+tax = tax[,-1] #removes col which became rownames
+tax = as.matrix(tax) # makes as matrix
+
+
+
+################## parse seqtab ####################
+
+seqtab_clean = as_tibble(seqtab_final)
+
+seqtab_clean <- seqtab_clean[names(seqtab_clean) %in% blast_results$`Query ID`]
+
+
+dim(seqtab_clean)
+
+am_otu_n <- otu_table(
+  object = t(seqtab_clean),
+  taxa_are_rows = TRUE
+)
+
+dim(am_otu_n)
+
+am_tax <- tax_table(as.matrix(tax))
+
+# Combines ASV/OTU and Taxonomic table.
+am_physeq_clean_n <- phyloseq(am_otu_n, am_tax) 
+
+## Phyloseq object to use for further analysis on local computer.
+saveRDS(am_physeq_clean_n,"phyloseq_mifish_lca.rds") 
+```
+
+
+
+
+
+
+
+
+
+
+
+
+```{r library-import, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dada2)
+library(phyloseq)
+library(Biostrings)
+```
+
+```{r data-import}
+# Consensus reads with UMI family sizes
+cons <- readr::read_csv("out.csv")
+print(head(cons))
+
+# Fasta with reference sequences for taxonomy assignment
+# This reference fasta file should be formatted so that the
+# id lines correspond to the taxonomy
+taxo_db <- "../data/scandi_fish_12s_v1.4.fa"
+```
+
+## Assigning taxa
+
+```{r assign_taxa}
+# Convert cons table to dataframe in dada2 input format
+seqtab_nochim <- data.frame(
+  sequence = cons["Read"],
+  abundance = cons["Size"]
+)
+colnames(seqtab_nochim) <- c("sequence", "abundance")
+
+# This uses a Naives-Bayes trained classifier
+# seqs: A character vector of the sequences to be assigned
+taxa <- dada2::assignTaxonomy(
+  seqs = seqtab_nochim,
+  refFasta = taxo_db,
+  multithread = TRUE
+)
+```
+
+### Getting unqiue sequences
+
+```{r process_data}
+dada2::uniquesToFasta(
+  dada2::getUniques(seqtab_nochim),
+  "uniqueSeqs.fasta",
+  ids = as.character(as.list(names(uniques))),
+  collapse = FALSE
+)
+
+
+dada2:::writeFasta(dada2::getUniques(seqtab_nochim), "uniqueSeqs.fasta")
+
+# Create a DNAStringSet from the ASVs
+dna <- Biostrings::readDNAStringSet(
+  filepath = paste0(path_results, "/uniqueSeqs.fasta")
+)
+```
+
+## Run phyloseq
+
+Create a phyloseq object.
+
+```{r test}
+## phyloseq-class experiment-level object
+## otu_table()   OTU Table:         [ 19216 taxa and 8 samples ]
+## sample_data() Sample Data:       [ 8 samples by 7 sample variables ]
+## tax_table()   Taxonomy Table:    [ 19216 taxa by 7 taxonomic ranks ]
+## phy_tree()    Phylogenetic Tree: [ 19216 tips and 19215 internal nodes ]
+
+ps_run <- phyloseq::phyloseq(
+  phyloseq::otu_table(seqtab_nochim, taxa_are_rows = FALSE),
+  tax_table(taxa),
+  phyloseq::refseq(dna))
+```
+
+### Visualizations
+
+
+
+
+

@@ -22,10 +22,15 @@ display_help() {
 #------------- Initilialize parameters -------------#
 #####################################################
 
-# Directories for python scripts
-UMISWARM="/mnt/c/Users/Stefan/Documents/GitHub/umiSwarm/src/extract_umi_from_header.py"
-CONS="/mnt/c/Users/Stefan/Documents/GitHub/umiSwarm/src/generate_consensus.py"
-addUmiToHeader="/mnt/c/Users/Stefan/Documents/GitHub/umiSwarm/src/add_umi_to_header.py"
+# Directory containing the scripts
+src="/mnt/c/Users/Stefan/Documents/GitHub/umiSwarm/src"
+
+# Define script variables
+UMISWARM="${src}/python/extract_umi_from_header.py"
+CONS="${src}/python/generate_consensus.py"
+addUmiToHeader="${src}/python/add_umi_to_header.py"
+lca="${src}/python/lca.py"
+fastatootu="${src}/python/fasta_to_otu.py"
 
 # Set defaults for general parameters
 umi_length=19  # UMI-length to tranfer to header
@@ -286,8 +291,8 @@ do
         --fastaout "${PREFIX}_swarm_umi_in_header.fasta"
 
       # Compress output fasta files
-      #pigz "${PREFIX}_merged_noPrimers_dereplicated.fasta"
-      #pigz "${PREFIX}_swarm.fasta"
+      pigz "${PREFIX}_merged_noPrimers_dereplicated.fasta"
+      pigz "${PREFIX}_swarm.fasta"
 
       # make dereplicate representatives, merge on only marker region.
       vsearch \
@@ -311,11 +316,9 @@ do
       # Merge reads by UMI and create abundance table
       #printf "%s \n" "Merging consensus families."
 
-      #python3 "$CONS" \
-      #  --fasta "${PREFIX}_non_chim.fasta" \
-      #  --output "${PREFIX}_cons_otu.csv" \
-      #  --umi_length 19
-
+      python3 "$fastatootu" \
+        --fasta "${PREFIX}_non_chim.fasta" \
+        --otu "${PREFIX}_cons_otu.csv"
     fi
 done
 
@@ -329,30 +332,60 @@ done
 # UMI familiy sizes as values. This can then be used for downstream
 # processing with phyloseq.
 
+# This merges otu sequences from the non chimeric sequences from all samples
+# and will be used as the input for blast in the enxt step
+fastaout="rep-seqs.fasta"
+blastdb="/mnt/c/Users/Stefan/Documents/GitHub/umiSwarm/data/blast_db/ScandiFish_12s_v1.4.fasta_db"
+
+Rscript "${src}/R/merge_samples.R" $FILES $fastaout
+
 ##############################################
 ###---------- Annotate sequences ----------###
 ##############################################
 
+#-------- Generate reference database ------
+# TODO put in an if statement that generates a new database if non exists (or based on user request)
 #download reference database
 #wget https://raw.githubusercontent.com/EivindStensrud/ScandiFish/main/ScandiFish_12s_v1.2/ScandiFish_12s_v1.4_nf.fasta # Downloads database
 #wget https://raw.githubusercontent.com/EivindStensrud/ScandiFish/main/ScandiFish_12s_v1.2/ScandiFish_12s_v1.4_nf.fasta.md5 # Downloads md5sum
 
 #md5sum -c ScandiFish_12s_v1.4.fasta.md5 # Checks if database is correct.
 
+# Generate database, this only needs to be done once
+#makeblastdb \
+#  -in /mnt/c/Users/Stefan/Documents/GitHub/umiSwarm/data/blast_db/ScandiFish_12s_v1.4.fasta \
+#  -out /mnt/c/Users/Stefan/Documents/GitHub/umiSwarm/data/blast_db/ScandiFish_12s_v1.4.fasta_db \
+#  -dbtype nucl \
+#  -title "12S ScandiFish_12s_v1.4 Scandinavian fish database"
 
-
-# Run nucleotide BLAST
+#-------- Run nucleotide BLAST ------
 # BLASTN compares the sequences and keeps up to 100 reference sequences.
 # Input is DADA2 output from function uniquesToFasta(seqtab.nochim).
+blastn \
+  -max_target_seqs 100 \
+  -evalue 0.01 \
+  -query "$FILES/$fastaout" \
+  -out "$FILES/blast_results.txt" \
+  -db $blastdb \
+  -outfmt 6 \
+  -num_threads $ncore
 
-#blastn \
-#  -max_target_seqs 100 \
-#  -evalue 0.01 \
-#  -query /cluster/projects/nn9745k/02_results/40_simsenseq/umi_and_seq/rep-seqs.fna \
-#  -out /cluster/projects/nn9745k/02_results/40_simsenseq/umi_and_seq/umi_and_seqs_output_blast_results \
-#  -db /cluster/projects/nn9745k/03_databases/fish/ScandiFish_12s_v1.4/ScandiFish_12s_v1.4.fasta_db \
-#  -outfmt 6 \
-#  -num_threads $ncore 
+#------------ LCA analysis ----------
+# Best hit goes to species, taxonomic sorting is conducted if top hit <99%
+python3 $lca \
+  -i "$FILES/blast_results.txt" \
+  -o "$FILES/blast_results_lca.txt" \
+  -b 8 \
+  -id 98 \
+  -cov 95 \
+  -t best_hit \
+  -tid 99 \
+  -tcov 100 \
+  -flh unknown
+
+## Continue in the workflow in R.
+
+
 
 ##############################################
 ###------------ Phyloseq report -----------###

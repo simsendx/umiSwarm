@@ -1,0 +1,1 @@
+#Query	#lca rank	#lca taxon	#kingdom	#phylum	#class	#order	#family	#genus	#species	#method
